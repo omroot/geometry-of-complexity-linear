@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+
+# LaTeX build droppings
+paper/*.aux
+paper/*.log
+paper/*.out
+paper/*.synctex.gz
+paper/*.toc
+paper/*.fls
+paper/*.fdb_latexmk
+
+# Generated artifacts (large/regenerated, not tracked)
+cache/
+artifacts/results/
+artifacts/smoke/
+
+# Heavy result pickles written by the IPCA experiments alongside the xlsx
+# (e.g. result_rff_all_*_*.pkl). xlsx files in this dir ARE tracked.
+results/data/xlsx/*.pkl
+
+# OS
+.DS_Store
