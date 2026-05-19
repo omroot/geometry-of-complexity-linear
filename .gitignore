@@ -17,10 +17,14 @@ paper/*.fdb_latexmk
 cache/
 artifacts/results/
 artifacts/smoke/
+smoke_results/
 
 # Heavy result pickles written by the IPCA experiments alongside the xlsx
 # (e.g. result_rff_all_*_*.pkl). xlsx files in this dir ARE tracked.
 results/data/xlsx/*.pkl
+
+# Secrets
+.env
 
 # OS
 .DS_Store
