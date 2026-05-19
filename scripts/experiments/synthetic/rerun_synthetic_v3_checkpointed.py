@@ -65,12 +65,27 @@ SWEEPS = {
 }
 
 
-def build_synthetic_inputs():
+# Smoke-mode overrides: tiny single-cell sweeps for the .smoke/ harness.
+# Not used unless --smoke is passed.
+SMOKE_SWEEPS = {
+    "A": {"result_set": "sweep_A_smoke", "P": [16], "K": [2, 4], "Z": [0, 10]},
+    "B": {"result_set": "sweep_B_smoke", "P": [16, 32], "K": [4], "Z": [10]},
+    "C": {"result_set": "sweep_C_smoke", "P": [16], "K": [4], "Z": [0, 10, 50]},
+    "D": {"result_set": "sweep_D_smoke", "P": [16, 32], "K": [4], "Z": [10]},
+}
+
+
+def build_synthetic_inputs(smoke: bool = False):
+    if smoke:
+        # ~60-period × 20-asset × 10-char panel; small enough for ~1 min sweep.
+        T, N, m, k0 = 60, 20, 10, 2
+    else:
+        T, N, m, k0 = 360, 50, 30, TRUE_K0
     df_synth, truth, char_cols = generate_synthetic_panel(
-        T=360,
-        N=50,
-        m=30,
-        k0=TRUE_K0,
+        T=T,
+        N=N,
+        m=m,
+        k0=k0,
         seed=42,
         snr_base=5.0,
         eigenvalue_decay=0.82,
@@ -185,6 +200,11 @@ def parse_args():
         action="store_true",
         help="Also overwrite data/all_synthetic_datarun_results.csv.",
     )
+    parser.add_argument(
+        "--smoke",
+        action="store_true",
+        help="Use tiny smoke-mode panel + single-cell SWEEPS for the .smoke/ harness.",
+    )
     return parser.parse_args()
 
 
@@ -194,16 +214,20 @@ def main():
     os.environ.setdefault("MKL_NUM_THREADS", "1")
 
     args = parse_args()
+    sweeps_table = SMOKE_SWEEPS if args.smoke else SWEEPS
     requested = [s.strip().upper() for s in args.sweeps.split(",") if s.strip()]
-    unknown = sorted(set(requested) - set(SWEEPS))
+    unknown = sorted(set(requested) - set(sweeps_table))
     if unknown:
-        raise ValueError(f"Unknown sweeps: {unknown}. Valid sweeps: {sorted(SWEEPS)}")
+        raise ValueError(f"Unknown sweeps: {unknown}. Valid sweeps: {sorted(sweeps_table)}")
 
     cache_root = Path(os.environ.get("GOCL_CACHE_DIR", REPO_ROOT / "cache"))
     checkpoint_root = cache_root / "synthetic_v3_checkpoints"
-    output_dir = REPO_ROOT / "results" / "data" / "csv"
+    output_dir = Path(
+        os.environ.get("GOCL_DATA_DIR", REPO_ROOT / "results" / "data" / "csv")
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    df_synth, truth, x_chars = build_synthetic_inputs()
+    df_synth, truth, x_chars = build_synthetic_inputs(smoke=args.smoke)
     print(f"Panel shape: {df_synth.shape}", flush=True)
     print(f"True k0: {truth['true_k0']}", flush=True)
     print(f"w_drift_scale: {truth['w_drift_scale']:.6f}", flush=True)
@@ -213,7 +237,7 @@ def main():
         pieces.append(
             run_one_sweep(
                 name,
-                SWEEPS[name],
+                sweeps_table[name],
                 df_synth,
                 x_chars,
                 checkpoint_root,

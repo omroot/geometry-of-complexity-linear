@@ -42,7 +42,7 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 
-from src.models.ipca_grassmannian import generate_ipca_workflow_panel
+from src.models.grassmannian_ipca import generate_ipca_workflow_panel
 from src.workflows.grassmannian_ipca import GrassmannianIPCAWorkflow
 from src.io.naming import build_experiment_excel_name
 from src.portfolio import (

@@ -66,7 +66,8 @@ importlib.reload(ipca)
 
 # %%
 WORKDIR = Path.cwd()
-RESULTS_DIR = WORKDIR
+RESULTS_DIR = Path(os.environ.get("XLSX_DIR", WORKDIR))
+RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
 USE_SYNTHETIC_DATA = True
 USE_CACHED_REAL_CHAR_DATA = False
@@ -133,6 +134,19 @@ FORECAST_START = "1993-01-01"
 MIN_TRAIN_OBS = 500
 MARKET_CAP_TOP_N = 50
 
+# Smoke-mode overrides for the .smoke/ harness — opt in with GOCL_SMOKE=1.
+if os.environ.get("GOCL_SMOKE") == "1":
+    SYNTHETIC_CONFIG = {**SYNTHETIC_CONFIG, "T": 60, "N": 20, "m": 10}
+    FULL_SEEDS = [10, 20]
+    LARGE_RFF_SEEDS = [10]
+    RFF_SMALL_COMPONENTS = [8, 16]
+    RFF_LARGE_COMPONENTS = [32]
+    # SYNTHETIC_CONFIG["start_date"] = "1990-01-01" by default, T=60 ends ~1994-12.
+    # Forecast must start at MIN_TRAIN_OBS in and leave OOS room.
+    FORECAST_START = "1992-01-01"
+    MIN_TRAIN_OBS = 24
+    MARKET_CAP_TOP_N = 20
+
 SAVE_RESULTS_TO_PICKLES = True
 LOAD_RESULTS_FROM_PICKLES = False
 
@@ -196,7 +210,7 @@ config_preview
 # **Synthetic Data (Run When `USE_SYNTHETIC_DATA=True`)**
 
 # %%
-from src.models.ipca_grassmannian import generate_ipca_workflow_panel
+from src.models.grassmannian_ipca import generate_ipca_workflow_panel
 
 if USE_SYNTHETIC_DATA:
     synthetic_kwargs = dict(SYNTHETIC_CONFIG)

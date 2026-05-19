@@ -8,7 +8,7 @@ from typing import Optional
 import numpy as np
 from sklearn.metrics import r2_score
 
-from src.models.ipca_grassmannian import GrassmannianManifoldIPCAEstimator
+from src.models.grassmannian_ipca import GrassmannianManifoldIPCAEstimator
 from src.workflows.ipca import IPCAWorkflow
 
 

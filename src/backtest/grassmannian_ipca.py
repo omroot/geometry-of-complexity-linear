@@ -82,7 +82,7 @@ import numpy as np
 # The GrassmannianManifoldIPCAEstimator must be importable from the same package.
 # Adjust the import path to match your project layout.
 # ---------------------------------------------------------------------------
-from src.models.ipca_grassmannian import GrassmannianManifoldIPCAEstimator
+from src.models.grassmannian_ipca import GrassmannianManifoldIPCAEstimator
 
 
 # ===========================================================================

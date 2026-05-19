@@ -72,7 +72,7 @@ numpy, GrassmannianManifoldIPCAEstimator (from IPCA_Grass_estimator.py)
 
 import numpy as np
 
-from src.models.ipca_grassmannian import GrassmannianManifoldIPCAEstimator
+from src.models.grassmannian_ipca import GrassmannianManifoldIPCAEstimator
 from src.backtest.grassmannian_ipca import _principal_angles, _spectral_gap_ratio
 
 
