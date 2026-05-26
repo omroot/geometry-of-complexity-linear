@@ -14,19 +14,3 @@
 
 6. **Keep notebooks free of function definitions.** Functions belong under `src/` or `scripts/`.
 
-## Project Structure
-
-- Always include a `.gitignore`.
-- Always include a `README.md` that recommends creating a conda environment named after the repo.
-- Always maintain a `requirements.txt` reflecting the imports used in the repo.
-
-## Dependencies
-
-- Optional dependencies are guarded with try/except at import time (e.g., `ruptures`, `lightgbm`, `optuna`, `scikit-optimize`).
-- Public functions that require optional deps call a guard function (e.g., `_check_ruptures()`) as their first line, raising a helpful `ImportError` with install instructions.
-
-## Running Tests
-
-```bash
-pytest tests/
-```
