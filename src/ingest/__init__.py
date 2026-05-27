@@ -4,7 +4,10 @@ End-to-end real-data panel build:
     python -m src.ingest.build_panel --start 199001 --end 202512
 
 See :mod:`src.ingest.build_panel` for the orchestrator and
-:class:`src.ingest.pipeline.DataPipeline` for the per-step building blocks.
+:class:`src.ingest.pipeline.DataPipeline` for the WRDS / OpenAP download
+methods plus the model-panel helpers. The cleaning / merging primitives
+that turn raw downloads into the modelling panel live in
+:mod:`src.preprocess`.
 """
 
 from src.ingest.build_panel import build_panel

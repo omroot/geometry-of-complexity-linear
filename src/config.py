@@ -10,7 +10,7 @@ ROOT_DIR = Path(__file__).parent.parent
 RESULTS_DIR = ROOT_DIR / "results"
 
 # Frozen csv inputs that drive the analytical figure pipeline
-DATA_DIR = RESULTS_DIR / "data" / "csv"
+DATA_DIR = RESULTS_DIR / "data"
 
 # Cached xlsx results from past IPCA experiments
 XLSX_DIR = RESULTS_DIR / "data" / "xlsx"

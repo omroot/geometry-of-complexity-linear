@@ -13,11 +13,11 @@ paper/*.toc
 paper/*.fls
 paper/*.fdb_latexmk
 
-# Generated artifacts (large/regenerated, not tracked)
-cache/
-artifacts/results/
-artifacts/smoke/
-smoke_results/
+# Real-data downloads and the preprocessed modelling panel (large; regenerated
+# from scripts/ingest/00_build_panel.py). data/raw/ also holds the runtime
+# pgpass (.pgpass_runtime, mode 600) — keep it out of version control.
+data/raw/
+data/preprocessed/
 
 # Heavy result pickles written by the IPCA experiments alongside the xlsx
 # (e.g. result_rff_all_*_*.pkl). xlsx files in this dir ARE tracked.

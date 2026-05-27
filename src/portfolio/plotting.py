@@ -7,10 +7,15 @@ import pandas as pd
 
 
 def plot_cumulative(monthly_ret: pd.DataFrame) -> None:
-    """Plot cumulative-return curve from monthly portfolio returns.
+    """Plot the cumulative-return curve from monthly portfolio returns.
 
-    Expects a DataFrame with ``yyyymm`` and ``port_ret`` columns
-    (the output of ``src.portfolio.performance.compute_portfolio_returns``).
+    Args:
+        monthly_ret: Output of
+            :func:`src.portfolio.performance.compute_portfolio_returns`;
+            must have ``yyyymm`` and ``port_ret`` columns.
+
+    Raises:
+        ValueError: If either required column is missing.
     """
     required = {"yyyymm", "port_ret"}
     missing = [c for c in required if c not in monthly_ret.columns]

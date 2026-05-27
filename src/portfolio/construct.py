@@ -1,14 +1,16 @@
 """Portfolio construction from cross-sectional prediction signals.
 
-Three builders, each taking a panel of (date, prediction, realized return) and
-returning an asset-level DataFrame with weights:
+Three builders, each taking a panel of (date, prediction, realized return)
+and returning an asset-level DataFrame with weights:
 
-  * ``build_quantile_portfolios``    — decile/quintile sort with long-short spread
-  * ``build_long_only_portfolio``    — top-N or threshold-filtered longs only
-  * ``build_directional_portfolio``  — long-short scaled by prediction magnitude
+* :func:`build_quantile_portfolios` — decile/quintile sort with long-short
+  spread.
+* :func:`build_long_only_portfolio` — top-N or threshold-filtered longs only.
+* :func:`build_directional_portfolio` — long-short scaled by prediction
+  magnitude.
 
-Aggregate the asset-level output into monthly returns via
-``src.portfolio.performance.compute_portfolio_returns``.
+Aggregate asset-level output into monthly returns via
+:func:`src.portfolio.performance.compute_portfolio_returns`.
 """
 
 from __future__ import annotations
@@ -25,30 +27,30 @@ def build_quantile_portfolios(
     n_portfolios: int = 10,
     weight_col: str | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Build monthly quantile portfolios and long-short spread.
+    """Build monthly quantile portfolios and the long-short spread.
 
-    Parameters
-    ----------
-    data : pd.DataFrame
-        Input panel containing at least date, score, and return columns.
-    score_col : str
-        Column used to sort assets into portfolios.
-    ret_col : str
-        Realized return column.
-    date_col : str
-        Date column (monthly); coercible to pandas datetime.
-    n_portfolios : int
-        Number of portfolios (e.g., 10 for deciles).
-    weight_col : str, optional
-        If provided, computes value-weighted portfolio returns using this column.
-        Otherwise uses equal-weighted returns.
+    Args:
+        data: Input panel containing at least date, score, and return columns.
+        score_col: Column used to sort assets into portfolios.
+        ret_col: Realised return column.
+        date_col: Monthly date column; coercible to pandas datetime.
+        n_portfolios: Number of portfolios (e.g., ``10`` for deciles). Must
+            be at least 2.
+        weight_col: Optional column for value-weighted portfolio returns.
+            When omitted, returns are equal-weighted.
 
-    Returns
-    -------
-    tuple[pd.DataFrame, pd.DataFrame]
-        (long_df, wide_df)
-        - long_df: one row per (month, portfolio) with portfolio return.
-        - wide_df: one row per month with P1...Pn and long_short = Pn - P1.
+    Returns:
+        Tuple ``(long_df, wide_df)``:
+
+        * ``long_df`` — one row per ``(month, portfolio)`` with portfolio
+          return.
+        * ``wide_df`` — one row per month with columns ``P1 ... Pn`` and
+          ``long_short = Pn - P1``.
+
+    Raises:
+        ValueError: If required columns are missing, ``n_portfolios < 2``,
+            ``weight_col`` is missing from ``data``, no valid rows remain
+            after coercion, or all weights are non-positive.
     """
     required = {date_col, score_col, ret_col}
     missing = [c for c in required if c not in data.columns]
@@ -84,16 +86,14 @@ def build_quantile_portfolios(
         tmp = df.dropna(subset=[weight_col]).copy()
         tmp = tmp[tmp[weight_col] > 0]
         if tmp.empty:
-            raise ValueError("No positive weights available for weighted portfolio construction.")
-        long_df = (
-            tmp.groupby([date_col, "portfolio"], as_index=False)
-            .apply(
-                lambda g: pd.Series(
-                    {"portfolio_return": np.average(g[ret_col].to_numpy(), weights=g[weight_col].to_numpy())}
-                )
-            )
-            .reset_index(drop=True)
+            raise ValueError("No positive weights available for portfolio construction.")
+        # Weighted average = sum(w * r) / sum(w), per (month, portfolio).
+        tmp = tmp.assign(_wr=tmp[weight_col] * tmp[ret_col])
+        agg = tmp.groupby([date_col, "portfolio"], as_index=False).agg(
+            _wr=("_wr", "sum"), _w=(weight_col, "sum"),
         )
+        agg["portfolio_return"] = agg["_wr"] / agg["_w"]
+        long_df = agg[[date_col, "portfolio", "portfolio_return"]]
 
     wide_df = long_df.pivot(index=date_col, columns="portfolio", values="portfolio_return").sort_index()
     wide_df = wide_df.rename(columns={k: f"P{k}" for k in wide_df.columns})
@@ -110,14 +110,19 @@ def build_long_only_portfolio(
 ) -> pd.DataFrame:
     """Select stocks each month with positive predicted returns.
 
-    Parameters
-    ----------
-    pred_df : pd.DataFrame
-        Panel with at least ``yyyymm``, ``y_pred``, ``y_true`` columns.
-    top_n : int, optional
-        If set, take only top N stocks by predicted return each month.
-    threshold : float
-        Minimum predicted return to be included (default 0).
+    Args:
+        pred_df: Panel with at least ``yyyymm``, ``y_pred``, ``y_true``
+            columns.
+        top_n: When set, keep only the top ``N`` stocks by predicted return
+            per month. Must be positive when supplied.
+        threshold: Minimum predicted return required for inclusion.
+
+    Returns:
+        Asset-level DataFrame with an equal weight per month assigned to
+        ``weight``. Columns: ``yyyymm``, ``y_pred``, ``y_true``, ``weight``.
+
+    Raises:
+        ValueError: If required columns are missing or ``top_n`` is non-positive.
     """
     required = {"yyyymm", "y_pred", "y_true"}
     missing = [c for c in required if c not in pred_df.columns]
@@ -158,39 +163,38 @@ def build_directional_portfolio(
     gross_exposure: float = 1.0,
     drop_zero_preds: bool = True,
 ) -> pd.DataFrame:
-    """Build a simple long-short portfolio from predicted returns.
+    """Build a long-short portfolio from predicted returns.
 
-    Parameters
-    ----------
-    pred_df : pd.DataFrame
-        Input panel containing date, prediction, and realized return columns.
-    date_col : str
-        Monthly date column.
-    pred_col : str
-        Predicted return / signal column.
-    ret_col : str
-        Realized return column.
-    weighting : {"prediction_scaled", "equal_weight_sign"}
-        ``prediction_scaled`` uses predicted returns as weights. Positive
-        predictions are long, negative predictions are short.
-        ``equal_weight_sign`` ignores magnitude and gives each non-zero signal
-        the same absolute weight.
-    normalize_weights : bool
-        When ``True`` and ``weighting='prediction_scaled'``, scale each month's
-        weights so the sum of absolute weights equals ``gross_exposure``.
-        When ``False``, asset weights are ``gross_exposure * y_pred``.
-    gross_exposure : float
-        Target gross exposure when normalized. Must be positive.
-    drop_zero_preds : bool
-        If ``True``, rows with zero predictions are excluded from the portfolio.
+    Args:
+        pred_df: Input panel with at least date, prediction, and realised
+            return columns.
+        date_col: Monthly date column.
+        pred_col: Predicted-return / signal column.
+        ret_col: Realised-return column.
+        weighting: ``"prediction_scaled"`` uses predicted returns as weights
+            (positive predictions go long, negative go short).
+            ``"equal_weight_sign"`` ignores magnitude and assigns each
+            non-zero signal the same absolute weight.
+        normalize_weights: When True and ``weighting='prediction_scaled'``,
+            scale each month's weights so the sum of absolute weights
+            equals ``gross_exposure``. When False, the asset weight is
+            ``gross_exposure * y_pred``.
+        gross_exposure: Target gross exposure when normalised. Must be
+            positive.
+        drop_zero_preds: When True, rows with zero predictions are
+            excluded.
 
-    Returns
-    -------
-    pd.DataFrame
-        Asset-level portfolio with weights and return contributions. The
-        ``raw_signal_return_pct`` column matches the user's requested
-        ``y_pred * y_true * 100`` style metric, while ``contribution_pct`` is
-        based on the portfolio weight actually used.
+    Returns:
+        Asset-level DataFrame with weights and return contributions.
+        ``raw_signal_return_pct`` matches the ``y_pred * y_true * 100``
+        style metric; ``contribution_pct`` is based on the portfolio weight
+        actually used.
+
+    Raises:
+        ValueError: If required columns are missing, ``weighting`` is
+            unknown, ``gross_exposure <= 0``, no valid rows remain after
+            coercion, no non-zero predictions remain, or every month has
+            zero gross signal under prediction-scaled weighting.
     """
     required = {date_col, pred_col, ret_col}
     missing = [c for c in required if c not in pred_df.columns]

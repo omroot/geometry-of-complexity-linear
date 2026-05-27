@@ -9,31 +9,53 @@ import pandas as pd
 def compute_portfolio_returns(port: pd.DataFrame) -> pd.DataFrame:
     """Aggregate monthly portfolio returns from asset-level weights.
 
-    Expects an asset-level DataFrame with columns ``yyyymm``, ``weight``,
-    ``y_true`` (as produced by ``src.portfolio.construct`` builders).
+    Args:
+        port: Asset-level DataFrame with columns ``yyyymm``, ``weight``,
+            ``y_true`` (as produced by the builders in
+            :mod:`src.portfolio.construct`).
+
+    Returns:
+        DataFrame with columns ``yyyymm`` and ``port_ret``, one row per
+        month, sorted by ``yyyymm``.
+
+    Raises:
+        ValueError: If any of ``yyyymm`` / ``weight`` / ``y_true`` is missing.
     """
     required = {"yyyymm", "weight", "y_true"}
     missing = [c for c in required if c not in port.columns]
     if missing:
         raise ValueError(f"Missing required columns: {missing}")
 
-    monthly = (
-        port.groupby("yyyymm", as_index=False)
-        .apply(lambda g: pd.Series({"port_ret": (g["weight"] * g["y_true"]).sum()}))
+    contributions = port["weight"] * port["y_true"]
+    return (
+        contributions.groupby(port["yyyymm"])
+        .sum()
+        .rename("port_ret")
+        .reset_index()
+        .sort_values("yyyymm")
         .reset_index(drop=True)
     )
-    return monthly.sort_values("yyyymm").reset_index(drop=True)
 
 
-def portfolio_performance(monthly_ret: pd.DataFrame, annual_factor: int = 12) -> dict[str, float]:
-    """Compute annualized return, vol, Sharpe, max drawdown, hit rate.
+def portfolio_performance(
+    monthly_ret: pd.DataFrame, annual_factor: int = 12
+) -> dict[str, float]:
+    """Compute annualised return, vol, Sharpe, max drawdown, and hit rate.
 
-    Parameters
-    ----------
-    monthly_ret : pd.DataFrame
-        Output of ``compute_portfolio_returns``: needs a ``port_ret`` column.
-    annual_factor : int
-        Periods per year (12 for monthly, 252 for daily).
+    Args:
+        monthly_ret: Output of :func:`compute_portfolio_returns`; must have
+            a ``port_ret`` column.
+        annual_factor: Periods per year used to annualise (``12`` for
+            monthly, ``252`` for daily).
+
+    Returns:
+        Dict with keys ``ann_ret``, ``ann_vol``, ``sharpe``, ``max_dd``,
+        ``hit_rate``. ``sharpe`` is ``float('nan')`` when ``ann_vol`` is
+        zero.
+
+    Raises:
+        ValueError: If ``port_ret`` is missing, or if no finite returns
+            remain after coercion.
     """
     required = {"port_ret"}
     missing = [c for c in required if c not in monthly_ret.columns]
@@ -46,7 +68,7 @@ def portfolio_performance(monthly_ret: pd.DataFrame, annual_factor: int = 12) ->
 
     ann_ret = r.mean() * annual_factor
     ann_vol = r.std(ddof=1) * np.sqrt(annual_factor)
-    sharpe = np.nan if ann_vol == 0 else ann_ret / ann_vol
+    sharpe = float("nan") if ann_vol == 0 else ann_ret / ann_vol
 
     cum = (1 + r).cumprod()
     roll_max = cum.cummax()
@@ -55,16 +77,10 @@ def portfolio_performance(monthly_ret: pd.DataFrame, annual_factor: int = 12) ->
 
     hit_rate = (r > 0).mean()
 
-    print(f"Annualized Return : {ann_ret:.2%}")
-    print(f"Annualized Vol    : {ann_vol:.2%}")
-    print(f"Sharpe Ratio      : {sharpe:.2f}")
-    print(f"Max Drawdown      : {max_dd:.2%}")
-    print(f"Hit Rate          : {hit_rate:.2%}")
-
     return {
         "ann_ret": float(ann_ret),
         "ann_vol": float(ann_vol),
-        "sharpe": float(sharpe) if not np.isnan(sharpe) else np.nan,
+        "sharpe": float(sharpe),
         "max_dd": float(max_dd),
         "hit_rate": float(hit_rate),
     }

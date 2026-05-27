@@ -10,7 +10,5 @@
 
 4. **Always write docstrings** for public functions and classes. Use Google-style docstrings with `Args` and `Returns` sections.
 
-5. **Write unit tests for all public functions.** Tests live in the `tests/` directory and use pytest.
-
-6. **Keep notebooks free of function definitions.** Functions belong under `src/` or `scripts/`.
+5. **Keep notebooks free of function definitions.** Functions belong under `src/` or `scripts/`.
 

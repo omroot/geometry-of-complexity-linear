@@ -97,6 +97,11 @@ def materialize_wrds_pgpass(
     runtime_pgpass.write_text(line, encoding="utf-8")
     runtime_pgpass.chmod(stat.S_IRUSR | stat.S_IWUSR)  # 0o600
     os.environ["PGPASSFILE"] = str(runtime_pgpass)
+    # ``wrds.Connection()`` (called with no args from inside openassetpricing)
+    # sets username to "" and tries to connect; libpq needs PGUSER to fill that
+    # in before PGPASSFILE can match an entry. Without this, the connection
+    # fails and wrds falls through to an interactive prompt -> EOFError.
+    os.environ["PGUSER"] = username
     return True
 
 
