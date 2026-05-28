@@ -35,7 +35,8 @@ from src.sweep import (
     SEEDS_LARGE,
     SEEDS_SMALL,
     SMALL_RFF,
-    run_one_fit,
+    SweepCell,
+    run_sweep,
 )
 
 
@@ -44,15 +45,29 @@ KT_CONFIGS: tuple[tuple[int, int], ...] = ((17, 24), (18, 24), (18, 36))
 ALPHA: float = 100.0
 
 
-def cells_for_kt(k: int, T: int) -> list[tuple[int, int, int, int]]:
-    """Build the (k, T, P, seed) cells for one (k, T) configuration."""
-    cells: list[tuple[int, int, int, int]] = [(k, T, BASELINE_RFF, SEEDS_SMALL[0])]
+def cells_for_kt(k: int, T: int) -> list[SweepCell]:
+    """Build the (k, T, P, seed) SweepCells for one (k, T) configuration."""
+    def make_cell(k: int, T: int, p: int, seed: int) -> SweepCell:
+        return SweepCell(
+            identity={"k": k, "T": T, "P": p, "seed": seed},
+            fit_kwargs=dict(
+                k=k,
+                train_window_months=T,
+                forecast_start=FORECAST_START,
+                rff_n_components=p,
+                rff_gamma=RFF_GAMMA,
+                rff_seed=seed,
+                alpha=ALPHA,
+            ),
+        )
+
+    cells: list[SweepCell] = [make_cell(k, T, BASELINE_RFF, SEEDS_SMALL[0])]
     for p in SMALL_RFF:
         for seed in SEEDS_SMALL:
-            cells.append((k, T, p, seed))
+            cells.append(make_cell(k, T, p, seed))
     for p in LARGE_RFF:
         for seed in SEEDS_LARGE:
-            cells.append((k, T, p, seed))
+            cells.append(make_cell(k, T, p, seed))
     return cells
 
 
@@ -65,21 +80,7 @@ def main() -> None:
     all_cells = [c for k, T in KT_CONFIGS for c in cells_for_kt(k, T)]
     print(f"Short window: {len(all_cells)} cells across {len(KT_CONFIGS)} (k, T) configs")
 
-    rows: list[dict] = []
-    for i, (k, T, p, seed) in enumerate(all_cells, start=1):
-        print(f"  [{i:>4}/{len(all_cells)}] k={k}, T={T}, P={p:>4}, seed={seed}", flush=True)
-        metrics = run_one_fit(
-            panel,
-            k=k,
-            train_window_months=T,
-            forecast_start=FORECAST_START,
-            rff_n_components=p,
-            rff_gamma=RFF_GAMMA,
-            rff_seed=seed,
-            alpha=ALPHA,
-        )
-        if metrics is not None:
-            rows.append({"k": k, "T": T, "P": p, "seed": seed, **metrics})
+    rows = run_sweep(panel, all_cells)
 
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(rows).to_csv(OUT_PATH, index=False)

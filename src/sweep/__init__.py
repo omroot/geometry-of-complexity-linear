@@ -20,6 +20,7 @@ from src.sweep.defaults import (
     SMALL_RFF,
     TRAIN_WINDOW_MONTHS,
 )
+from src.sweep.parallel import SweepCell, run_sweep
 from src.sweep.runner import DEFAULT_PANEL_PATH, load_real_panel, run_one_fit
 
 __all__ = [
@@ -34,6 +35,8 @@ __all__ = [
     "SEEDS_SMALL",
     "SMALL_RFF",
     "TRAIN_WINDOW_MONTHS",
+    "SweepCell",
     "load_real_panel",
     "run_one_fit",
+    "run_sweep",
 ]

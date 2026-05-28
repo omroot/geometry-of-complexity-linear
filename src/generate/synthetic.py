@@ -12,7 +12,8 @@ Implements the paper §8.1 DGP and exposes two entry points:
   and reshapes the output for the rolling
   :class:`src.workflows.grassmannian_ipca.GrassmannianIPCAWorkflow`. Adds
   ``yyyymm``/``permno`` columns, renames ``ret -> excess_ret``, computes
-  ``y_ipca`` (next-month excess return per asset), and synthesizes a
+  ``y_ipca`` (same-month excess return per asset; see :func:`generate_workflow_panel`),
+  and synthesizes a
   persistent ``mcap`` column for the workflow's market-cap filter. Used
   by the short-window runs (paper §8.5).
 
@@ -258,8 +259,13 @@ def generate_workflow_panel(
       column names are used by different parts of the workflow).
     * Drops the dummy ``Price`` column (the workflow treats unknown columns
       as characteristics).
-    * Adds ``y_ipca = next-month excess_ret`` per asset and drops the final
-      month per asset (no target available).
+    * Adds ``y_ipca = excess_ret`` per asset (same-month, no shift). The §8.1
+      DGP draws characteristics i.i.d. across months, so a forward shift would
+      make the prediction problem structurally impossible. The paper's
+      "next-month" framing is implicit (chars known at period start, return
+      realizes during the period), not an explicit shift. The real-data
+      ingest pipeline still applies ``shift(-1)`` because real characteristics
+      are persistent.
     * Synthesizes a persistent log-AR(1) ``mcap`` column with feedback from
       lagged returns; the workflow's market-cap filter (``mcap_filter_top_n``)
       uses this when present and skips filtering when absent.
@@ -336,7 +342,15 @@ def generate_workflow_panel(
         panel_df[col] = char_wide[col].reshape(-1)
 
     panel_df = panel_df.sort_values(["permno", "yyyymm"]).reset_index(drop=True)
-    panel_df["y_ipca"] = panel_df.groupby("permno")["excess_ret"].shift(-1)
+    # §8.1 DGP uses i.i.d. characteristics across months: Z_t carries no
+    # information about Z_{t+1}, so pairing Z_t with r_{t+1} would make the
+    # prediction problem structurally impossible. Per the paper's convention
+    # (confirmed with the authors), y_ipca is the same-month return — the
+    # "next-month prediction" framing is implicit in the IPCA narrative
+    # (chars known at period start, return realizes during the period), not
+    # an explicit shift. Real-data ingest (src/ingest/pipeline.py) keeps the
+    # shift(-1) because characteristics there are persistent.
+    panel_df["y_ipca"] = panel_df["excess_ret"]
     panel_df = (
         panel_df.dropna(subset=["y_ipca"])
         .sort_values(["yyyymm", "permno"])

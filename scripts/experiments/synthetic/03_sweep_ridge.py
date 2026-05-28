@@ -30,7 +30,8 @@ from src.sweep import (
     PAPER_DGP_DEFAULTS,
     RFF_GAMMA,
     TRAIN_WINDOW_MONTHS,
-    run_one_fit,
+    SweepCell,
+    run_sweep,
 )
 
 
@@ -47,24 +48,24 @@ OUT_PATH = REPO_ROOT / "results" / "data" / "sweep_ridge.csv"
 def main() -> None:
     print(f"Generating §8.1 panel...")
     panel, _ = generate_workflow_panel(**PAPER_DGP_DEFAULTS)
-    cells = [(z, seed) for z in Z_VALUES for seed in SEEDS]
+    cells = [
+        SweepCell(
+            identity={"sweep": SWEEP_TAG, "k": K_FIXED, "P": RFF_M, "z": z, "seed": seed},
+            fit_kwargs=dict(
+                k=K_FIXED,
+                train_window_months=TRAIN_WINDOW_MONTHS,
+                forecast_start=FORECAST_START,
+                rff_n_components=RFF_M,
+                rff_gamma=RFF_GAMMA,
+                rff_seed=seed,
+                alpha=z,
+            ),
+        )
+        for z in Z_VALUES for seed in SEEDS
+    ]
     print(f"Sweep C: {len(cells)} cells")
 
-    rows: list[dict] = []
-    for i, (z, seed) in enumerate(cells, start=1):
-        print(f"  [{i:>2}/{len(cells)}] k={K_FIXED}, P={RFF_M}, z={z:>5}, seed={seed}", flush=True)
-        metrics = run_one_fit(
-            panel,
-            k=K_FIXED,
-            train_window_months=TRAIN_WINDOW_MONTHS,
-            forecast_start=FORECAST_START,
-            rff_n_components=RFF_M,
-            rff_gamma=RFF_GAMMA,
-            rff_seed=seed,
-            alpha=z,
-        )
-        if metrics is not None:
-            rows.append({"sweep": SWEEP_TAG, "k": K_FIXED, "P": RFF_M, "z": z, "seed": seed, **metrics})
+    rows = run_sweep(panel, cells)
 
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(rows).to_csv(OUT_PATH, index=False)

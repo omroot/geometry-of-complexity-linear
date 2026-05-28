@@ -280,9 +280,12 @@ def rolling_fit(
         if rff_omega is None:
             return X_norm
         proj = X_norm @ rff_omega
-        return np.concatenate([np.sin(proj), np.cos(proj)], axis=1) * np.sqrt(
-            2.0 / rff_n_components
-        )
+        # Raw sin/cos — matches the reference §8.2 pipeline and the canonical
+        # RandomFourierFeatures class in src/models/rff.py. The sqrt(2/m)
+        # normalization that previously lived here changed the effective
+        # ridge scale relative to the paper's setup and shifted the
+        # Sharpe-vs-z optimum.
+        return np.concatenate([np.sin(proj), np.cos(proj)], axis=1)
 
     prediction_rows: list[pd.DataFrame] = []
     fitted_bases: list[np.ndarray] = []
