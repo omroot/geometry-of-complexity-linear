@@ -20,6 +20,9 @@ matplotlib>=3.4.0
 # Parquet IO for the raw and preprocessed panels under data/.
 pyarrow>=6.0.0
 
+# Process-level parallelism for sweep cells (src.sweep.parallel).
+joblib>=1.2.0
+
 # Real-data ingest (used only by scripts/00_build_panel.py and the
 # download helpers in src/ingest/). Synthetic experiments don't
 # require either of these.
