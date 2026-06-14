@@ -36,7 +36,8 @@ from src.sweep import (
     RFF_GAMMA,
     TRAIN_WINDOW_MONTHS,
     load_real_panel,
-    run_one_fit,
+    load_voc_top50_permnos,
+    run_seed_averaged_fit,
 )
 
 
@@ -45,7 +46,7 @@ SWEEP_TAG: str = "real_baseline"
 K_VALUES: tuple[int, ...] = (4, 8, 12, 16, 20, 24, 28, 32)
 P_VALUES: tuple[int, ...] = (64, 128, 256, 512, 1024, 4096, 10000)
 Z_VALUES: tuple[float, ...] = (0.0, 10.0, 20.0, 50.0, 100.0)
-RFF_SEED: int = 42  # baseline grid uses a single fixed seed per cell
+RFF_SEEDS: tuple[int, ...] = (0, 1, 2)
 TOP_N_UNIVERSE: int = 50
 
 OUT_PATH = REPO_ROOT / "results" / "data" / "real_baseline_grid.csv"
@@ -53,7 +54,12 @@ OUT_PATH = REPO_ROOT / "results" / "data" / "real_baseline_grid.csv"
 
 def main() -> None:
     print("Loading top-50 fixed-universe panel...")
-    panel = load_real_panel(top_n=TOP_N_UNIVERSE)
+    voc_permnos = load_voc_top50_permnos()
+    panel = load_real_panel(
+        permno_list=voc_permnos,
+        top_n=None if voc_permnos is not None else TOP_N_UNIVERSE,
+    )
+    rectangular_ids = voc_permnos or sorted(panel["permno"].unique().tolist())
     print(
         f"  panel: {panel.shape}, "
         f"{panel['permno'].nunique()} permnos, "
@@ -63,20 +69,34 @@ def main() -> None:
     cells = [(k, p, z) for k in K_VALUES for p in P_VALUES for z in Z_VALUES]
     print(f"Baseline grid: {len(cells)} cells")
 
+    # Resume: skip cells already written to OUT_PATH
+    done: set = set()
     rows: list[dict] = []
+    if OUT_PATH.exists():
+        existing = pd.read_csv(OUT_PATH)
+        rows = existing.to_dict("records")
+        done = {(r["k"], r["P"], r["z"]) for r in rows}
+        print(f"  Resuming: {len(done)} cells already done, {len(cells)-len(done)} remaining")
+
     for i, (k, p, z) in enumerate(cells, start=1):
+        if (k, p, z) in done:
+            print(f"  [{i:>3}/{len(cells)}] k={k:>2}, P={p:>5}, z={z:>5} [skip]", flush=True)
+            continue
         print(f"  [{i:>3}/{len(cells)}] k={k:>2}, P={p:>5}, z={z:>5}", flush=True)
-        metrics = run_one_fit(
+        metrics = run_seed_averaged_fit(
             panel,
+            rff_seeds=RFF_SEEDS,
             k=k,
             train_window_months=TRAIN_WINDOW_MONTHS,
             forecast_start=FORECAST_START,
-            rff_n_components=p,
+            rff_n_components=p // 2,
             rff_gamma=RFF_GAMMA,
-            rff_seed=RFF_SEED,
             alpha=z,
             cross_sectional_normalize=True,
-            min_train_obs=TOP_N_UNIVERSE * 6,  # need at least 6 months of cross-sections
+            voc_rectangular=True,
+            rectangular_ids=rectangular_ids,
+            cross_sectional_ddof=1,
+            min_train_obs=TOP_N_UNIVERSE * 6,
         )
         if metrics is not None:
             rows.append({
@@ -84,9 +104,10 @@ def main() -> None:
                 "k": k, "P": p, "z": z, "T": TRAIN_WINDOW_MONTHS,
                 **metrics,
             })
+            # Write after every cell so progress is never lost
+            OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+            pd.DataFrame(rows).to_csv(OUT_PATH, index=False)
 
-    OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(rows).to_csv(OUT_PATH, index=False)
     print(f"\nWrote {len(rows)} rows -> {OUT_PATH}")
 
 

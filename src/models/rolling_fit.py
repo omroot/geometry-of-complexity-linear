@@ -115,6 +115,12 @@ def rolling_fit(
     cross_sectional_normalize: bool = False,
     market_cap_col: Optional[str] = None,
     market_cap_top_n: Optional[int] = None,
+    voc_rectangular: bool = False,
+    rectangular_ids: Optional[list] = None,
+    cross_sectional_ddof: int = 0,
+    voc_max_nan_frac: float = 0.3,
+    voc_max_zero_frac: float = 1.0,
+    max_oos_windows: Optional[int] = None,
     warm_start: bool = True,
     max_iter: int = 200,
     iter_tol: float = 1e-6,
@@ -159,6 +165,18 @@ def rolling_fit(
             cap (no look-ahead).
         market_cap_top_n: Number of stocks to retain per OOS month.
             Ignored when ``market_cap_col`` is None.
+        voc_rectangular: When True, mirror the legacy VoC backtest panel
+            construction: use a fixed rectangular asset universe, impute
+            missing cross-sectional returns/features by month, then
+            standardize features. This is intended for direct replication
+            checks against ``all_rff_results.csv``.
+        rectangular_ids: Fixed asset order for ``voc_rectangular``. When
+            omitted, uses the sorted asset ids present in ``panel``.
+        cross_sectional_ddof: Delta degrees of freedom for cross-sectional
+            feature standardization. The legacy VoC path used pandas
+            ``std()``, i.e. ``ddof=1``.
+        max_oos_windows: Optional cap on fitted OOS months, useful for cheap
+            diagnostics. ``None`` runs all available OOS months.
         warm_start: Reuse the previous month's fitted basis as the optimizer
             initial point.
         max_iter: Maximum optimizer iterations.
@@ -193,6 +211,32 @@ def rolling_fit(
     if not char_cols:
         raise ValueError("No characteristic columns detected.")
 
+    if voc_rectangular:
+        if market_cap_top_n is not None:
+            raise ValueError("voc_rectangular does not support market_cap_top_n.")
+        return _rolling_fit_voc_rectangular(
+            work,
+            k=k,
+            train_window_months=train_window_months,
+            forecast_start=forecast_start,
+            rff_n_components=rff_n_components,
+            rff_gamma=rff_gamma,
+            rff_seed=rff_seed,
+            alpha=alpha,
+            char_cols=char_cols,
+            target_col=target_col,
+            id_col=id_col,
+            time_col=time_col,
+            rectangular_ids=rectangular_ids,
+            cross_sectional_ddof=cross_sectional_ddof,
+            max_oos_windows=max_oos_windows,
+            warm_start=warm_start,
+            max_iter=max_iter,
+            iter_tol=iter_tol,
+            max_nan_frac=voc_max_nan_frac,
+            max_zero_frac=voc_max_zero_frac,
+        )
+
     work = work.sort_values([time_col, id_col]).reset_index(drop=True)
     work["i_idx"] = work[id_col].factorize(sort=True)[0].astype(np.int64)
     work["t_idx"] = work[time_col].factorize(sort=True)[0].astype(np.int64)
@@ -226,6 +270,11 @@ def rolling_fit(
             pd.Timestamp(month_val) - pd.DateOffset(months=train_window_months)
         ).to_datetime64()
         train_start_pos[pos] = int(np.searchsorted(months_ns, cutoff, side="left"))
+
+    # Snapshot raw characteristics before any z-scoring so the RFF lift can
+    # operate on the original scale (matching backtest_GRASS_IPCA.py step 6,
+    # which lifts raw chars then z-scores RFF features — not the other way round).
+    X_raw_all_for_lift = X_raw_all
 
     # Cross-sectional z-score per month (paper §9.1 convention) takes precedence
     # over the fixed-first-window normalization. When enabled, we pre-normalize
@@ -287,13 +336,28 @@ def rolling_fit(
         # Sharpe-vs-z optimum.
         return np.concatenate([np.sin(proj), np.cos(proj)], axis=1)
 
+    # Pre-compute full-panel lifted features and cross-sectionally normalize them
+    # when cross_sectional_normalize=True. RFF is applied to the RAW (un-z-scored)
+    # characteristics, matching backtest_GRASS_IPCA.py step 6 which lifts raw chars
+    # and then z-scores only the RFF features. Pre-z-scoring raw chars before RFF
+    # would approximate a different kernel (equivalent gamma changes per-feature).
+    X_lift_all: Optional[np.ndarray] = None
+    if cross_sectional_normalize and rff_n_components > 0:
+        X_lift_all = _lift(X_raw_all_for_lift)  # lift raw (un-z-scored) chars
+        X_lift_all = _cross_sectional_normalize(
+            X_lift_all, month_starts, month_ends, ddof=cross_sectional_ddof
+        )
+
     prediction_rows: list[pd.DataFrame] = []
     fitted_bases: list[np.ndarray] = []
     factor_returns: list[np.ndarray] = []
     oos_months: list[pd.Timestamp] = []
     prev_basis: Optional[np.ndarray] = None
 
+    fitted_count = 0
     for test_pos in pred_positions:
+        if max_oos_windows is not None and fitted_count >= max_oos_windows:
+            break
         test_pos = int(test_pos)
         test_month = months[test_pos]
         start_pos = int(train_start_pos[test_pos])
@@ -322,7 +386,10 @@ def rolling_fit(
         y_train_f = y_train[finite_train]
         idx_train_f = idx_train[finite_train]
 
-        X_train_lift = _lift(X_train)
+        if X_lift_all is not None:
+            X_train_lift = X_lift_all[train_slice][finite_train]
+        else:
+            X_train_lift = _lift(X_train)
 
         X_test_raw = X_raw_all[test_slice]
         y_test = y_all[test_slice]
@@ -333,7 +400,10 @@ def rolling_fit(
         if not finite_test.any():
             continue
         X_test = (X_test_raw[finite_test] - norm_mu) / norm_sd
-        X_test_lift = _lift(X_test)
+        if X_lift_all is not None:
+            X_test_lift = X_lift_all[test_slice][finite_test]
+        else:
+            X_test_lift = _lift(X_test)
 
         rets_train, Z_train, _metad = _panel_to_rt_z(X_train_lift, y_train_f, idx_train_f)
         m_eff = Z_train.shape[2]
@@ -384,6 +454,234 @@ def rolling_fit(
         fitted_bases.append(prev_basis)
         factor_returns.append(factor_history)
         oos_months.append(pd.Timestamp(test_month))
+        fitted_count += 1
+
+    predictions = (
+        pd.concat(prediction_rows, ignore_index=True)
+        if prediction_rows
+        else _empty_predictions(id_col, time_col)
+    )
+    return RollingFitResult(
+        predictions=predictions,
+        fitted_bases=fitted_bases,
+        factor_returns=factor_returns,
+        oos_months=oos_months,
+    )
+
+
+def _rolling_fit_voc_rectangular(
+    work: pd.DataFrame,
+    *,
+    k: int,
+    train_window_months: int,
+    forecast_start: str | pd.Timestamp,
+    rff_n_components: int,
+    rff_gamma: float,
+    rff_seed: int,
+    alpha: float,
+    char_cols: list[str],
+    target_col: str,
+    id_col: str,
+    time_col: str,
+    rectangular_ids: Optional[list],
+    cross_sectional_ddof: int,
+    max_oos_windows: Optional[int],
+    warm_start: bool,
+    max_iter: int,
+    iter_tol: float,
+    max_nan_frac: float = 0.3,
+    max_zero_frac: float = 1.0,
+) -> RollingFitResult:
+    """VoC-compatible rectangular rolling fit.
+
+    The legacy VoC worker RFF-transformed observed rows, dropped rows whose
+    target return was unavailable, then the backtest unstacked to ``T x N``
+    panels and cross-sectionally imputed missing asset-month pairs. This path
+    mirrors that behavior for direct comparisons against ``all_rff_results``.
+
+    Args:
+        max_nan_frac: Drop assets whose target return is NaN for more than
+            this fraction of months (mirrors VoC's ``max_nan=0.3``).
+        max_zero_frac: Drop assets whose target return is exactly zero for
+            more than this fraction of months (mirrors VoC's ``max_zero``).
+    """
+    fit_work = work[np.isfinite(work[target_col].to_numpy(np.float64))].copy()
+    if fit_work.empty:
+        return RollingFitResult(predictions=_empty_predictions(id_col, time_col))
+
+    fit_work = fit_work.sort_values([time_col, id_col]).reset_index(drop=True)
+
+    # Candidate asset universe: rectangular_ids if provided, else all observed.
+    candidate_ids = (
+        list(rectangular_ids)
+        if rectangular_ids is not None
+        else sorted(fit_work[id_col].dropna().unique().tolist())
+    )
+
+    # Mirror VoC run_ipca_grass_v2 step 3: drop assets with too many NaN or
+    # zero target returns across the full sample (organic, not hardcoded).
+    all_months = fit_work[time_col].dropna().unique()
+    n_months_total = len(all_months)
+    rets_wide = (
+        fit_work.pivot_table(index=time_col, columns=id_col, values=target_col)
+        .reindex(columns=candidate_ids)
+    )
+    # Compute fractions over the full panel (including months with no observation).
+    nan_frac  = rets_wide.isna().mean()
+    zero_frac = (rets_wide == 0).mean()
+    good_mask = (nan_frac <= max_nan_frac) & (zero_frac <= max_zero_frac)
+    ids = [i for i in candidate_ids if good_mask.get(i, False)]
+    if not ids:
+        return RollingFitResult(predictions=_empty_predictions(id_col, time_col))
+    dropped = len(candidate_ids) - len(ids)
+    if dropped:
+        import warnings
+        warnings.warn(
+            f"voc_rectangular: dropped {dropped}/{len(candidate_ids)} assets "
+            f"(max_nan_frac={max_nan_frac}, max_zero_frac={max_zero_frac})",
+            stacklevel=4,
+        )
+    months = np.sort(fit_work[time_col].dropna().unique())
+    start_ts = pd.Timestamp(forecast_start).to_period("M").to_timestamp()
+    pred_positions = np.flatnonzero(months >= start_ts.to_datetime64())
+    if pred_positions.size == 0:
+        return RollingFitResult(predictions=_empty_predictions(id_col, time_col))
+
+    obs_index = pd.MultiIndex.from_frame(fit_work[[time_col, id_col]])
+    raw_obs = pd.DataFrame(
+        fit_work[char_cols].to_numpy(np.float64),
+        index=obs_index,
+    )
+    # Match notebook pre-RFF safety fill for observed rows. In the current
+    # top-50 data this is a no-op, but it keeps the path robust if raw
+    # characteristics contain sporadic NaNs.
+    raw_obs = (
+        raw_obs.groupby(level=0).transform(lambda s: s.fillna(s.median()))
+        .fillna(raw_obs.median())
+        .fillna(0.0)
+    )
+
+    rff_omega: Optional[np.ndarray] = None
+    if rff_n_components > 0:
+        rng = np.random.default_rng(rff_seed)
+        rff_omega = (
+            rng.standard_normal((len(char_cols), rff_n_components))
+            * float(rff_gamma)
+        )
+
+    def _lift(X_raw: np.ndarray) -> np.ndarray:
+        if rff_omega is None:
+            return X_raw
+        proj = X_raw @ rff_omega
+        return np.concatenate([np.sin(proj), np.cos(proj)], axis=1) * np.sqrt(
+            2.0 / rff_n_components
+        )
+
+    feature_obs = pd.DataFrame(_lift(raw_obs.to_numpy(np.float64)), index=obs_index)
+    y_obs = pd.Series(
+        fit_work[target_col].to_numpy(np.float64),
+        index=obs_index,
+        name=target_col,
+    )
+
+    feature_blocks: list[np.ndarray] = []
+    y_blocks: list[np.ndarray] = []
+    for month in months:
+        try:
+            X_month = feature_obs.xs(month, level=0).reindex(ids)
+        except KeyError:
+            X_month = pd.DataFrame(index=ids, columns=feature_obs.columns, dtype=float)
+        X_month = X_month.astype(float)
+        X_month = X_month.fillna(X_month.mean(axis=0)).fillna(0.0)
+        mu = X_month.mean(axis=0)
+        sd = X_month.std(axis=0, ddof=cross_sectional_ddof)
+        sd = sd.where(np.isfinite(sd) & (sd > 0), 1.0)
+        X_month = ((X_month - mu) / sd).fillna(0.0)
+        feature_blocks.append(X_month.to_numpy(np.float64))
+
+        try:
+            y_month = y_obs.xs(month, level=0).reindex(ids).astype(float)
+        except KeyError:
+            y_month = pd.Series(index=ids, dtype=float)
+        y_month = y_month.fillna(y_month.mean()).fillna(0.0)
+        y_blocks.append(y_month.to_numpy(np.float64))
+
+    months_ns = months.astype("datetime64[ns]")
+    train_start_pos = np.zeros(months.size, dtype=np.int64)
+    for pos, month_val in enumerate(months):
+        cutoff = (
+            pd.Timestamp(month_val) - pd.DateOffset(months=train_window_months)
+        ).to_datetime64()
+        train_start_pos[pos] = int(np.searchsorted(months_ns, cutoff, side="left"))
+
+    prediction_rows: list[pd.DataFrame] = []
+    fitted_bases: list[np.ndarray] = []
+    factor_returns: list[np.ndarray] = []
+    oos_months: list[pd.Timestamp] = []
+    prev_basis: Optional[np.ndarray] = None
+    fitted_count = 0
+
+    for test_pos in pred_positions:
+        if max_oos_windows is not None and fitted_count >= max_oos_windows:
+            break
+        test_pos = int(test_pos)
+        start_pos = int(train_start_pos[test_pos])
+        if start_pos >= test_pos:
+            continue
+
+        rets_train = np.stack(y_blocks[start_pos:test_pos], axis=0)
+        Z_train = np.stack(feature_blocks[start_pos:test_pos], axis=0)
+        if rets_train.shape[0] != train_window_months:
+            continue
+        m_eff = Z_train.shape[2]
+        if m_eff < k:
+            continue
+
+        estimator = GrassmannianManifoldIPCAEstimator(
+            n_assets=rets_train.shape[1],
+            k=k,
+            m=m_eff,
+            t_train=rets_train.shape[0],
+            shrinkage=max(float(alpha), 1e-8),
+        )
+
+        initial_point = None
+        if warm_start and prev_basis is not None and prev_basis.shape == (m_eff, k):
+            initial_point = prev_basis
+
+        Wopt, f_hat, _history = estimator.fit(
+            data=(rets_train, Z_train),
+            optimizer="ConjugateGradient",
+            max_iterations=max_iter,
+            iter_tol=iter_tol,
+            verbosity=0,
+            initial_point=initial_point,
+        )
+        prev_basis = np.asarray(Wopt, dtype=np.float64)
+        factor_history = np.asarray(f_hat, dtype=np.float64).T
+        factor_mean = factor_history.mean(axis=1)
+
+        X_test = feature_blocks[test_pos]
+        y_test = y_blocks[test_pos]
+        y_pred = X_test @ Wopt @ factor_mean
+        test_month = pd.Timestamp(months[test_pos])
+        prediction_rows.append(
+            pd.DataFrame(
+                {
+                    id_col: ids,
+                    time_col: np.full(len(ids), test_month, dtype="datetime64[ns]"),
+                    "y_true": y_test,
+                    "y_pred": y_pred,
+                    "train_end": pd.Timestamp(months[test_pos - 1]),
+                    "n_train": int(rets_train.size),
+                    "n_test": int(len(ids)),
+                }
+            )
+        )
+        fitted_bases.append(prev_basis)
+        factor_returns.append(factor_history)
+        oos_months.append(test_month)
+        fitted_count += 1
 
     predictions = (
         pd.concat(prediction_rows, ignore_index=True)
@@ -405,7 +703,7 @@ def _empty_predictions(id_col: str, time_col: str) -> pd.DataFrame:
 
 
 def _cross_sectional_normalize(
-    X: np.ndarray, month_starts: np.ndarray, month_ends: np.ndarray
+    X: np.ndarray, month_starts: np.ndarray, month_ends: np.ndarray, ddof: int = 0
 ) -> np.ndarray:
     """Z-score each month's cross-section independently (paper §9.1).
 
@@ -417,7 +715,7 @@ def _cross_sectional_normalize(
     for start, end in zip(month_starts, month_ends):
         block = out[start:end]
         mu = np.nanmean(block, axis=0)
-        sd = np.nanstd(block, axis=0, ddof=0)
+        sd = np.nanstd(block, axis=0, ddof=ddof)
         sd = np.where(np.isfinite(sd) & (sd > 0), sd, 1.0)
         out[start:end] = (block - mu) / sd
     return out

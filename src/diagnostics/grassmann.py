@@ -81,7 +81,9 @@ def grassmann_distance(
     angles = principal_angles(basis_a, basis_b)
     if metric == "geodesic":
         return float(np.sqrt(np.sum(angles ** 2)))
-    if metric in ("projection", "chordal_2"):
+    if metric == "projection":
+        return float(np.sqrt(2.0 * np.sum(np.sin(angles) ** 2)))
+    if metric == "chordal_2":
         return float(np.sqrt(np.sum(np.sin(angles) ** 2)))
     raise ValueError(f"Unknown metric {metric!r}")
 
@@ -108,7 +110,7 @@ def projection_distance(basis_a: np.ndarray, basis_b: np.ndarray) -> float:
     qb = _orthonormalize(basis_b)
     proj_a = qa @ qa.T
     proj_b = qb @ qb.T
-    return float(np.linalg.norm(proj_a - proj_b, ord="fro") / np.sqrt(2.0))
+    return float(np.linalg.norm(proj_a - proj_b, ord="fro"))
 
 
 def anisotropy_ratio(angles: np.ndarray) -> float:

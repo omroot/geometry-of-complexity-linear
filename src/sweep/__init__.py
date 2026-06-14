@@ -21,7 +21,13 @@ from src.sweep.defaults import (
     TRAIN_WINDOW_MONTHS,
 )
 from src.sweep.parallel import SweepCell, run_sweep
-from src.sweep.runner import DEFAULT_PANEL_PATH, load_real_panel, run_one_fit
+from src.sweep.runner import (
+    DEFAULT_PANEL_PATH,
+    load_real_panel,
+    load_voc_top50_permnos,
+    run_one_fit,
+    run_seed_averaged_fit,
+)
 
 __all__ = [
     "BASELINE_RFF",
@@ -37,6 +43,8 @@ __all__ = [
     "TRAIN_WINDOW_MONTHS",
     "SweepCell",
     "load_real_panel",
+    "load_voc_top50_permnos",
     "run_one_fit",
+    "run_seed_averaged_fit",
     "run_sweep",
 ]

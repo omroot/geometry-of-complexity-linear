@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 
 from src.diagnostics.aggregation import aggregate_window_diagnostics
@@ -26,6 +27,31 @@ from src.portfolio import (
 
 REPO_ROOT: Path = Path(__file__).resolve().parents[2]
 DEFAULT_PANEL_PATH: Path = REPO_ROOT / "data" / "preprocessed" / "char_data.parquet"
+
+# VoC WRDS top-50 permnos search order:
+#   1. data/reference/top50_permnos.csv  (bundled in this repo — works on Colab)
+#   2. sibling VoC repo (local dev convenience)
+_TOP50_CANDIDATES: list[Path] = [
+    REPO_ROOT / "data" / "reference" / "top50_permnos.csv",
+    (
+        REPO_ROOT.parent
+        / "TheVirtueOfComplexity_PaperReplication_Experimentation"
+        / "data"
+        / "top50_permnos.csv"
+    ),
+]
+
+
+def load_voc_top50_permnos() -> Optional[list]:
+    """Return the VoC WRDS-derived top-50 permno list, or None if not found.
+
+    Searches data/reference/ first (works on Colab after cloning this repo),
+    then falls back to the sibling VoC repo for local dev.
+    """
+    for path in _TOP50_CANDIDATES:
+        if path.exists():
+            return pd.read_csv(path)["permno"].astype(int).tolist()
+    return None
 
 
 def run_one_fit(panel: pd.DataFrame, **rolling_fit_kwargs) -> Optional[dict]:
@@ -68,10 +94,17 @@ def run_one_fit(panel: pd.DataFrame, **rolling_fit_kwargs) -> Optional[dict]:
 
     y_true = result.predictions["y_true"].to_numpy()
     y_pred = result.predictions["y_pred"].to_numpy()
-    ss_tot = float((y_true ** 2).sum())
+    # Filter to finite pairs only — y_true can contain NaN when a stock has
+    # valid characteristics but a missing return in the panel.
+    finite_mask = np.isfinite(y_true) & np.isfinite(y_pred)
+    y_t = y_true[finite_mask]
+    y_p = y_pred[finite_mask]
+    # Centered SS_tot matches the original backtest_GRASS_IPCA.py convention:
+    # R² = 1 - Σ(y - ŷ)² / Σ(y - ȳ)²  (null model predicts the sample mean)
+    ss_tot = float(((y_t - y_t.mean()) ** 2).sum()) if len(y_t) > 1 else 0.0
     oos_r2 = (
         float("nan") if ss_tot == 0
-        else 1.0 - float(((y_true - y_pred) ** 2).sum()) / ss_tot
+        else 1.0 - float(((y_t - y_p) ** 2).sum()) / ss_tot
     )
 
     return {
@@ -79,6 +112,7 @@ def run_one_fit(panel: pd.DataFrame, **rolling_fit_kwargs) -> Optional[dict]:
         "mean_max_principal_angle": diag.mean_max_principal_angle,
         "mean_mean_principal_angle": diag.mean_mean_principal_angle,
         "mean_anisotropy": diag.mean_anisotropy,
+        "mean_geodesic_accel": diag.mean_geodesic_accel,
         "mean_erank": diag.mean_erank,
         "mean_spectral_gap": diag.mean_spectral_gap,
         "oos_r2": oos_r2,
@@ -87,9 +121,39 @@ def run_one_fit(panel: pd.DataFrame, **rolling_fit_kwargs) -> Optional[dict]:
     }
 
 
+def run_seed_averaged_fit(
+    panel: pd.DataFrame,
+    *,
+    rff_seeds: tuple[int, ...],
+    **rolling_fit_kwargs,
+) -> Optional[dict]:
+    """Run one grid cell over multiple RFF seeds and average metric rows."""
+    seed_metrics: list[dict] = []
+    for seed in rff_seeds:
+        metrics = run_one_fit(panel, rff_seed=seed, **rolling_fit_kwargs)
+        if metrics is not None:
+            seed_metrics.append(metrics)
+            print(
+                f"      seed={seed}: sharpe={metrics['sharpe']:+.4f}  "
+                f"r2={metrics['oos_r2']:.4f}  "
+                f"erank={metrics['mean_erank']:.4f}  "
+                f"gap={metrics['mean_spectral_gap']:.4f}",
+                flush=True,
+            )
+
+    if not seed_metrics:
+        return None
+
+    return {
+        key: float(np.mean([metrics[key] for metrics in seed_metrics]))
+        for key in seed_metrics[0]
+    } | {"n_seeds": len(seed_metrics)}
+
+
 def load_real_panel(
     top_n: Optional[int] = None,
     *,
+    permno_list: Optional[list] = None,
     panel_path: Optional[Path] = None,
 ) -> pd.DataFrame:
     """Load the real-data characteristics panel.
@@ -102,12 +166,11 @@ def load_real_panel(
 
     Args:
         top_n: When given, restrict to the top-N permnos by **mean**
-            market cap over the full sample. This is the fixed-universe
-            convention used by the §9.1-§9.9 baseline grid (small
-            look-ahead by construction). When None, returns the full
-            panel — used by the §9.10 extended backtest where the
-            top-N filter happens per-month inside ``rolling_fit`` via
-            ``market_cap_top_n`` (no look-ahead).
+            market cap over the full sample (using nsmallest on Size proxy).
+            Ignored when ``permno_list`` is provided.
+        permno_list: Explicit list of permnos to keep. Takes precedence over
+            ``top_n``. Use this to match the exact VoC reference universe
+            (loaded from ``data/top50_permnos.csv``).
         panel_path: Override the default parquet path. Ignored when the
             ``CHAR_DATA_PARQUET`` env var is set.
 
@@ -138,8 +201,28 @@ def load_real_panel(
     if "mcap" not in panel.columns:
         raise ValueError("Panel has neither 'mcap' nor 'Size' column.")
 
-    if top_n is not None:
-        top_permnos = panel.groupby("permno")["mcap"].mean().nlargest(top_n).index
+    if permno_list is not None:
+        # Explicit permno list — matches exact VoC reference universe.
+        panel = panel[panel["permno"].isin(permno_list)]
+    elif top_n is not None:
+        # Size (= mcap alias) is negatively correlated with market cap:
+        # more negative Size → larger company.  Use nsmallest to select top-N.
+        top_permnos = panel.groupby("permno")["mcap"].mean().nsmallest(top_n).index
         panel = panel[panel["permno"].isin(top_permnos)]
+
+    # Align target: y_ipca[t] = excess_ret[t+1] so the model predicts
+    # NEXT month's return from current-month characteristics.  Without this
+    # shift, STreversal (= -excess_ret[t]) is a perfect same-period predictor
+    # and inflates Sharpe by ~60x.  Matches the reference notebook convention:
+    #   df["y_ipca"] = df.groupby("permno")["excess_ret"].shift(-1)
+    # Calendar-month merge (not row-based shift) so gaps don't misalign labels.
+    panel = panel.copy()
+    panel["yyyymm"] = pd.to_datetime(panel["yyyymm"])
+    next_ret = panel[["permno", "yyyymm", "excess_ret"]].copy()
+    next_ret["yyyymm"] = next_ret["yyyymm"] - pd.DateOffset(months=1)
+    next_ret = next_ret.rename(columns={"excess_ret": "_y_ipca_next"})
+    panel = panel.merge(next_ret, on=["permno", "yyyymm"], how="left")
+    panel["y_ipca"] = panel["_y_ipca_next"]
+    panel = panel.drop(columns=["_y_ipca_next"])
 
     return panel.reset_index(drop=True)

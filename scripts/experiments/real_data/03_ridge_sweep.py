@@ -29,6 +29,7 @@ from src.sweep import (
     RFF_GAMMA,
     TRAIN_WINDOW_MONTHS,
     load_real_panel,
+    load_voc_top50_permnos,
     run_one_fit,
 )
 
@@ -46,8 +47,13 @@ OUT_PATH = REPO_ROOT / "results" / "data" / "real_ridge_sweep.csv"
 
 def main() -> None:
     print("Loading top-50 fixed-universe panel...")
-    panel = load_real_panel(top_n=TOP_N_UNIVERSE)
-    print(f"  panel: {panel.shape}")
+    voc_permnos = load_voc_top50_permnos()
+    panel = load_real_panel(
+        permno_list=voc_permnos,
+        top_n=None if voc_permnos is not None else TOP_N_UNIVERSE,
+    )
+    rectangular_ids = voc_permnos or sorted(panel["permno"].unique().tolist())
+    print(f"  panel: {panel.shape}, {panel['permno'].nunique()} permnos")
 
     cells = [(z, seed) for z in Z_VALUES for seed in SEEDS]
     print(f"Ridge sweep: {len(cells)} cells")
@@ -64,11 +70,14 @@ def main() -> None:
             k=K_FIXED,
             train_window_months=TRAIN_WINDOW_MONTHS,
             forecast_start=FORECAST_START,
-            rff_n_components=RFF_M,
+            rff_n_components=RFF_M // 2,
             rff_gamma=RFF_GAMMA,
             rff_seed=seed,
             alpha=z,
             cross_sectional_normalize=True,
+            voc_rectangular=True,
+            rectangular_ids=rectangular_ids,
+            cross_sectional_ddof=1,
             min_train_obs=TOP_N_UNIVERSE * 6,
         )
         if metrics is not None:

@@ -39,6 +39,9 @@ class WindowDiagnostics:
             between consecutive fitted bases.
         mean_anisotropy: Mean of the per-window anisotropy ratio
             ``mean(angles) / max(angles)``.
+        mean_geodesic_accel: Mean absolute first-difference of consecutive
+            ``d_proj`` values: ``mean(|d_proj_t - d_proj_{t-1}|)``.
+            Matches VoC's ``avg_geodesic_accel`` column in all_rff_results.csv.
         mean_erank: Mean effective rank of the per-window factor covariance
             ``F F^T / T_train``.
         mean_spectral_gap: Mean of ``lambda_k / lambda_1`` over the per-window
@@ -53,6 +56,7 @@ class WindowDiagnostics:
     mean_max_principal_angle: float
     mean_mean_principal_angle: float
     mean_anisotropy: float
+    mean_geodesic_accel: float
     mean_erank: float
     mean_spectral_gap: float
     n_windows: int
@@ -97,6 +101,7 @@ def aggregate_window_diagnostics(
             mean_max_principal_angle=float("nan"),
             mean_mean_principal_angle=float("nan"),
             mean_anisotropy=float("nan"),
+            mean_geodesic_accel=float("nan"),
             mean_erank=float("nan"),
             mean_spectral_gap=float("nan"),
             n_windows=0,
@@ -128,11 +133,21 @@ def aggregate_window_diagnostics(
             # Legacy convention for a rank-k factor model: lambda_k / lambda_1.
             spectral_gap_vals.append(float(eigvals[-1] / eigvals[0]))
 
+    # Geodesic acceleration = mean |Δd_proj| across consecutive windows.
+    # Matches VoC avg_geodesic_accel: measures how much the subspace speed changes.
+    if len(d_proj_vals) >= 2:
+        accel_vals = [abs(d_proj_vals[i + 1] - d_proj_vals[i])
+                      for i in range(len(d_proj_vals) - 1)]
+        mean_geodesic_accel = float(np.mean(accel_vals))
+    else:
+        mean_geodesic_accel = float("nan")
+
     return WindowDiagnostics(
         mean_subspace_stability=_mean_or_nan(d_proj_vals),
         mean_max_principal_angle=_mean_or_nan(angle_max_vals),
         mean_mean_principal_angle=_mean_or_nan(angle_mean_vals),
         mean_anisotropy=_mean_or_nan(anisotropy_vals),
+        mean_geodesic_accel=mean_geodesic_accel,
         mean_erank=_mean_or_nan(erank_vals),
         mean_spectral_gap=_mean_or_nan(spectral_gap_vals),
         n_windows=n,
