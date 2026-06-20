@@ -130,7 +130,11 @@ def run_seed_averaged_fit(
     """Run one grid cell over multiple RFF seeds and average metric rows."""
     seed_metrics: list[dict] = []
     for seed in rff_seeds:
-        metrics = run_one_fit(panel, rff_seed=seed, **rolling_fit_kwargs)
+        try:
+            metrics = run_one_fit(panel, rff_seed=seed, **rolling_fit_kwargs)
+        except np.linalg.LinAlgError as e:
+            print(f"      seed={seed}: SKIPPED — numerical failure ({e})", flush=True)
+            continue
         if metrics is not None:
             seed_metrics.append(metrics)
             print(
